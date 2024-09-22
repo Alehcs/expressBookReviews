@@ -1,187 +1,118 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const session = require('express-session');
-const axios = require('axios');
-
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const cors = require('cors'); // Opcional: para permitir CORS
+const { v4: uuidv4 } = require('uuid'); // Para generar IDs únicos
 const app = express();
-const PORT = 5000;
-const JWT_SECRET = "your_jwt_secret"; // En una aplicación real, usa una variable de entorno
+const port = 8080; // Se cambió el puerto a 8080
 
+// Middleware
 app.use(express.json());
-app.use("/customer", session({secret:"fingerprint_customer", resave: true, saveUninitialized: true}));
+app.use(cors()); // Habilitar CORS (opcional)
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key', // Se recomienda usar variables de entorno
+  resave: false,
+  saveUninitialized: true,
+}));
 
-let books = {
-    1: {"author": "Chinua Achebe", "title": "Things Fall Apart", "reviews": {}},
-    2: {"author": "Hans Christian Andersen", "title": "Fairy tales", "reviews": {}},
-    3: {"author": "Dante Alighieri", "title": "The Divine Comedy", "reviews": {}},
-    4: {"author": "Unknown", "title": "The Epic Of Gilgamesh", "reviews": {}},
-    5: {"author": "Unknown", "title": "The Book Of Job", "reviews": {}},
-    6: {"author": "Unknown", "title": "One Thousand and One Nights", "reviews": {}},
-    7: {"author": "Unknown", "title": "Nj\u00e1l's Saga", "reviews": {}},
-    8: {"author": "Jane Austen", "title": "Pride and Prejudice", "reviews": {}},
-    9: {"author": "Honor\u00e9 de Balzac", "title": "Le P\u00e8re Goriot", "reviews": {}},
-    10: {"author": "Samuel Beckett", "title": "Molloy, Malone Dies, The Unnamable, the trilogy", "reviews": {}}
-};
+// Mock database (replace with actual database in production)
+const books = [
+  { isbn: '123456', title: 'Sample Book 1', author: 'Author 1' },
+  { isbn: '789012', title: 'Sample Book 2', author: 'Author 2' },
+];
+const users = [];
+const reviews = [];
 
-let users = {};
-
-// Middleware para verificar si el usuario está logueado
+// Helper function to check if user is logged in
 const isLoggedIn = (req, res, next) => {
-    if (req.session.authorization) {
-        const token = req.session.authorization['accessToken'];
-        jwt.verify(token, JWT_SECRET, (err, user) => {
-            if (!err) {
-                req.user = user;
-                next();
-            } else {
-                return res.status(403).json({ message: "Usuario no autenticado" });
-            }
-        });
-    } else {
-        return res.status(403).json({ message: "Usuario no logueado" });
-    }
+  if (req.session.user) {
+    next();
+  } else {
+    res.status(401).json({ message: 'Unauthorized' });
+  }
 };
 
-// Task 1 & 10: Get the book list available in the shop
-app.get('/', async (req, res) => {
-    try {
-        res.send(JSON.stringify(books, null, 4));
-    } catch (error) {
-        res.status(500).send('Error retrieving books');
-    }
+// Routes
+app.get('/books', (req, res) => {
+  res.json(books);
 });
 
-// Task 2 & 11: Get book details based on ISBN
-app.get('/isbn/:isbn', async (req, res) => {
-    try {
-        const isbn = req.params.isbn;
-        const book = books[isbn];
-        if (book) {
-            res.send(JSON.stringify(book, null, 4));
-        } else {
-            res.status(404).send('Book not found');
-        }
-    } catch (error) {
-        res.status(500).send('Error retrieving book details');
-    }
+app.get('/books/isbn/:isbn', (req, res) => {
+  const book = books.find(b => b.isbn === req.params.isbn);
+  if (book) {
+    res.json(book);
+  } else {
+    res.status(404).json({ message: 'Book not found' });
+  }
 });
 
-// Task 3 & 12: Get book details based on author
-app.get('/author/:author', async (req, res) => {
-    try {
-        const author = req.params.author;
-        const booksByAuthor = Object.values(books).filter(book => book.author === author);
-        if (booksByAuthor.length > 0) {
-            res.send(JSON.stringify(booksByAuthor, null, 4));
-        } else {
-            res.status(404).send('No books found for this author');
-        }
-    } catch (error) {
-        res.status(500).send('Error retrieving books by author');
-    }
+app.get('/books/author/:author', (req, res) => {
+  const filteredBooks = books.filter(b => b.author.toLowerCase().includes(req.params.author.toLowerCase()));
+  res.json(filteredBooks);
 });
 
-// Task 4 & 13: Get all books based on title
-app.get('/title/:title', async (req, res) => {
-    try {
-        const title = req.params.title.toLowerCase();
-        const matchingBooks = Object.values(books).filter(book => 
-            book.title.toLowerCase().includes(title)
-        );
-        if (matchingBooks.length > 0) {
-            res.send(JSON.stringify(matchingBooks, null, 4));
-        } else {
-            res.status(404).send('No books found with this title');
-        }
-    } catch (error) {
-        res.status(500).send('Error retrieving books by title');
-    }
+app.get('/books/title/:title', (req, res) => {
+  const filteredBooks = books.filter(b => b.title.toLowerCase().includes(req.params.title.toLowerCase()));
+  res.json(filteredBooks);
 });
 
-// Task 5: Get book review
-app.get('/review/:isbn', (req, res) => {
-    const isbn = req.params.isbn;
-    const book = books[isbn];
-    if (book && book.reviews) {
-        res.send(JSON.stringify(book.reviews, null, 4));
-    } else {
-        res.status(404).send('No reviews found for this book');
-    }
+app.get('/reviews/:isbn', (req, res) => {
+  const bookReviews = reviews.filter(r => r.isbn === req.params.isbn);
+  res.json(bookReviews);
 });
 
-// Task 6: Register new user
-app.post("/register", (req, res) => {
-    const { username, password } = req.body;
-
-    if (!username || !password) {
-        return res.status(400).send("Username and password are required");
-    }
-
-    if (users[username]) {
-        return res.status(409).send("Username already exists");
-    }
-
-    users[username] = { username, password };
-    return res.status(201).send("User registered successfully");
+app.post('/register', async (req, res) => {
+  const { username, password } = req.body;
+  if (users.find(u => u.username === username)) {
+    return res.status(400).json({ message: 'Username already exists' });
+  }
+  const hashedPassword = await bcrypt.hash(password, 10);
+  users.push({ username, password: hashedPassword });
+  res.status(201).json({ message: 'User registered successfully' });
 });
 
-// Task 7: Login as a registered user
-app.post("/customer/login", (req, res) => {
-    const { username, password } = req.body;
-
-    if (!username || !password) {
-        return res.status(400).json({ message: "Username and password are required" });
-    }
-
-    const user = users[username];
-    if (user && user.password === password) {
-        const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: '1h' });
-        req.session.authorization = { accessToken: token };
-        return res.status(200).json({ message: "Login successful", token });
-    } else {
-        return res.status(401).json({ message: "Invalid credentials" });
-    }
+app.post('/login', async (req, res) => {
+  const { username, password } = req.body;
+  const user = users.find(u => u.username === username);
+  if (user && await bcrypt.compare(password, user.password)) {
+    req.session.user = username;
+    const token = jwt.sign({ username }, process.env.JWT_SECRET || 'your-jwt-secret', { expiresIn: '1h' }); // Se recomienda usar variables de entorno
+    res.json({ message: 'Logged in successfully', token });
+  } else {
+    res.status(401).json({ message: 'Invalid credentials' });
+  }
 });
 
-// Task 8: Add or modify a book review
-app.put("/customer/auth/review/:isbn", isLoggedIn, (req, res) => {
-    const isbn = req.params.isbn;
-    const review = req.query.review;
-    const username = req.user.username;
-
-    if (!books[isbn]) {
-        return res.status(404).json({ message: "Book not found" });
-    }
-
-    if (!review) {
-        return res.status(400).json({ message: "Review text is required" });
-    }
-
-    if (!books[isbn].reviews) {
-        books[isbn].reviews = {};
-    }
-
-    books[isbn].reviews[username] = review;
-
-    return res.status(200).json({ message: "Review added/modified successfully" });
+app.post('/reviews', isLoggedIn, (req, res) => {
+  const { isbn, text } = req.body;
+  const newReview = { id: uuidv4(), isbn, text, username: req.session.user };
+  reviews.push(newReview);
+  res.status(201).json(newReview);
 });
 
-// Task 9: Delete a book review
-app.delete("/customer/auth/review/:isbn", isLoggedIn, (req, res) => {
-    const isbn = req.params.isbn;
-    const username = req.user.username;
-
-    if (!books[isbn]) {
-        return res.status(404).json({ message: "Book not found" });
-    }
-
-    if (!books[isbn].reviews || !books[isbn].reviews[username]) {
-        return res.status(404).json({ message: "No review found for this user" });
-    }
-
-    delete books[isbn].reviews[username];
-
-    return res.status(200).json({ message: "Review deleted successfully" });
+app.put('/reviews/:id', isLoggedIn, (req, res) => {
+  const reviewId = req.params.id;
+  const reviewIndex = reviews.findIndex(r => r.id === reviewId && r.username === req.session.user);
+  if (reviewIndex !== -1) {
+    reviews[reviewIndex] = { ...reviews[reviewIndex], ...req.body };
+    res.json(reviews[reviewIndex]);
+  } else {
+    res.status(404).json({ message: 'Review not found or unauthorized' });
+  }
 });
 
-app.listen(PORT, () => console.log("Server is running"));
+app.delete('/reviews/:id', isLoggedIn, (req, res) => {
+  const reviewId = req.params.id;
+  const reviewIndex = reviews.findIndex(r => r.id === reviewId && r.username === req.session.user);
+  if (reviewIndex !== -1) {
+    reviews.splice(reviewIndex, 1);
+    res.json({ message: 'Review deleted successfully' });
+  } else {
+    res.status(404).json({ message: 'Review not found or unauthorized' });
+  }
+});
+
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
